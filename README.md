@@ -9,19 +9,13 @@ The supplied control code is preserved, with pasted HTML/Markdown escapes remove
 1. Keep the installed Python 3.11. If needed, install [Python 3.11.9](https://www.python.org/downloads/release/python-3119/) with pip and the Python launcher. [Python 3.11 supports Windows 8.1](https://docs.python.org/3.11/using/windows.html).
 2. Install [Git for Windows 2.46.2](https://github.com/git-for-windows/git/releases/tag/v2.46.2.windows.1): choose `Git-2.46.2-64-bit.exe` for 64-bit Windows or `Git-2.46.2-32-bit.exe` for 32-bit Windows. Enable Git in Command Prompt. This older release supports Windows 8.1; newer Git releases have changed OS requirements ([requirements](https://gitforwindows.org/requirements.html)).
 3. Install the matching 32-bit or 64-bit [Phidgets Windows drivers / Control Panel](https://www.phidgets.com/docs/OS_-_Windows). Phidgets documents Windows 8 and newer support. Confirm the devices are visible, then close any Control Panel channel windows before running the script.
-4. Open **Command Prompt** (`cmd`). Run:
+4. With Python 3.11, Git, and the Phidgets drivers installed, open **Command Prompt** (`cmd`) and paste this single line to download the project, install its Python dependency, and launch it:
 
 ```bat
-py -3.11 --version
-git --version
-cd /d "%USERPROFILE%"
-git -c credential.helper= clone https://github.com/Vian-G/heater-controller.git
-cd heater-controller
-py -3.11 -m pip install -r requirements.txt
-py -3.11 heater.py
+cd /d "%USERPROFILE%" && git clone https://github.com/Vian-G/heater-controller.git && cd heater-controller && py -3.11 -m pip install -r requirements.txt && py -3.11 heater.py
 ```
 
-Enter the target temperature in C when prompted. For HTTPS authentication, enter your GitHub username and use a personal access token as the password (GitHub account passwords do not work). Give the token read access to this private repository on the hardware laptop. The `credential.helper=` option avoids relying on browser sign-in helpers on the older OS and does not save the token. Never put a token in a URL or a project file.
+Use this setup command only for the first download; if `%USERPROFILE%\heater-controller` already exists, use the update command below. Each `&&` runs the next step only if the preceding step succeeds. Enter the target temperature in C when prompted. The repository is public, so cloning and pulling do not require a GitHub login or token.
 
 The only Python dependency is pinned to [Phidget22 1.26.20260821](https://pypi.org/project/phidget22/), which lists Python 3.11 and supplies 32-bit and 64-bit Windows wheels. Compatibility is based on package metadata and vendor documentation; this project has **not been tested on Windows 8.1 or actual Phidgets hardware**.
 
@@ -30,17 +24,14 @@ The only Python dependency is pinned to [Phidget22 1.26.20260821](https://pypi.o
 Finish/stop the current controller run before updating. In Command Prompt:
 
 ```bat
-cd /d "%USERPROFILE%\heater-controller"
-git -c credential.helper= pull --ff-only
-py -3.11 -m pip install -r requirements.txt
-py -3.11 heater.py
+cd /d "%USERPROFILE%\heater-controller" && git pull --ff-only && py -3.11 -m pip install -r requirements.txt && py -3.11 heater.py
 ```
 
 Keep code edits on the modern laptop; commit and push there, then pull on the hardware laptop. If pull reports local edits or diverging history, stop and review them. Logs are retained during ordinary updates.
 
 ## Develop on the modern laptop
 
-The GitHub repository is [Vian-G/heater-controller](https://github.com/Vian-G/heater-controller) and must remain **Private**. Clone it on the modern laptop using HTTPS:
+The GitHub repository is [Vian-G/heater-controller](https://github.com/Vian-G/heater-controller). Clone it on the modern laptop using HTTPS:
 
 ```bat
 git clone https://github.com/Vian-G/heater-controller.git
@@ -55,7 +46,8 @@ git commit -m "Describe the change"
 git push
 ```
 
-Then use the update commands above on the hardware laptop.
+Pushing changes requires GitHub authentication on the modern laptop. Then use the update command above on the hardware laptop.
+
 ## Existing shutdown behavior
 
 Ctrl+C exits the loop and reaches the existing `finally` block, which closes channels. The original code does not explicitly turn outputs off in `finally`, and device attachment occurs before the protected block. These behaviors were preserved; this packaging work does not establish fail-safe shutdown. Use the setup's physical heater shutdown procedure when stopping or handling errors.
