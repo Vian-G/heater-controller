@@ -76,7 +76,8 @@ def main():
                     on = False
                 for h in heaters:
                     h.setState(on)
-                print(f"Max: {max(temps):.2f} C | Avg: {avg:.2f} C | heaters {'ON' if on else 'OFF'}")
+                print(" | ".join(f"TI_{i}: {temp:.2f} C" for i, temp in zip(SENSOR_CHANNELS, temps))
+                      + f" | Avg: {avg:.2f} C | heaters {'ON' if on else 'OFF'}")
                 if monotonic() >= next_log:
                     writer.writerow([datetime.now().astimezone().isoformat(), *temps, avg])
                     log.flush()
