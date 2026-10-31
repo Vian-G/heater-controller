@@ -9,13 +9,13 @@ The supplied control code is preserved, with pasted HTML/Markdown escapes remove
 1. Keep the installed Python 3.11. If needed, install [Python 3.11.9](https://www.python.org/downloads/release/python-3119/) with pip and the Python launcher. [Python 3.11 supports Windows 8.1](https://docs.python.org/3.11/using/windows.html).
 2. Install [Git for Windows 2.46.2](https://github.com/git-for-windows/git/releases/tag/v2.46.2.windows.1): choose `Git-2.46.2-64-bit.exe` for 64-bit Windows or `Git-2.46.2-32-bit.exe` for 32-bit Windows. Enable Git in Command Prompt. This older release supports Windows 8.1; newer Git releases have changed OS requirements ([requirements](https://gitforwindows.org/requirements.html)).
 3. Install the matching 32-bit or 64-bit [Phidgets Windows drivers / Control Panel](https://www.phidgets.com/docs/OS_-_Windows). Phidgets documents Windows 8 and newer support. Confirm the devices are visible, then close any Control Panel channel windows before running the script.
-4. Open **Command Prompt** (`cmd`). Replace `YOUR_GITHUB_USERNAME` below with the account owning the private repository, then run:
+4. Open **Command Prompt** (`cmd`). Run:
 
 ```bat
 py -3.11 --version
 git --version
 cd /d "%USERPROFILE%"
-git -c credential.helper= clone https://github.com/YOUR_GITHUB_USERNAME/heater-controller.git
+git -c credential.helper= clone https://github.com/Vian-G/heater-controller.git
 cd heater-controller
 py -3.11 -m pip install -r requirements.txt
 py -3.11 heater.py
@@ -38,16 +38,16 @@ py -3.11 heater.py
 
 Keep code edits on the modern laptop; commit and push there, then pull on the hardware laptop. If pull reports local edits or diverging history, stop and review them. Logs are retained during ordinary updates.
 
-## Publish from the modern laptop (one time)
+## Develop on the modern laptop
 
-This local repository already has an initial commit. On [GitHub's new repository page](https://github.com/new), create **heater-controller**, select **Private**, and leave README, license, and .gitignore initialization unchecked. Replace `YOUR_GITHUB_USERNAME` below with the actual owner. Open Command Prompt in this local project folder and run:
+The GitHub repository is [Vian-G/heater-controller](https://github.com/Vian-G/heater-controller) and must remain **Private**. Clone it on the modern laptop using HTTPS:
 
 ```bat
-git remote add origin https://github.com/YOUR_GITHUB_USERNAME/heater-controller.git
-git push -u origin main
+git clone https://github.com/Vian-G/heater-controller.git
+cd heater-controller
 ```
 
-Sign in through Git's HTTPS prompt, or use your username and a personal access token with write access to this repository. Confirm GitHub shows **Private**. For subsequent code edits on the modern laptop:
+After editing code on the modern laptop:
 
 ```bat
 git add heater.py README.md requirements.txt .gitignore
@@ -55,6 +55,7 @@ git commit -m "Describe the change"
 git push
 ```
 
+Then use the update commands above on the hardware laptop.
 ## Existing shutdown behavior
 
 Ctrl+C exits the loop and reaches the existing `finally` block, which closes channels. The original code does not explicitly turn outputs off in `finally`, and device attachment occurs before the protected block. These behaviors were preserved; this packaging work does not establish fail-safe shutdown. Use the setup's physical heater shutdown procedure when stopping or handling errors.
