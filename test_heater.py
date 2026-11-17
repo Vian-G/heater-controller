@@ -32,6 +32,7 @@ def make_relays(channels):
 
 
 class ControllerTests(unittest.TestCase):
+    @patch.object(h, "TEMPERATURE_AVERAGE_SECONDS", 3.0)
     def test_three_second_average_with_jitter_and_partial_startup(self):
         from collections import deque
         history = deque([(0.0, (10, 20, 30, 40))])
@@ -233,7 +234,7 @@ class ControllerTests(unittest.TestCase):
                 self.assertNotIn("dry_run", config)
                 self.assertEqual(config["min_dwell_seconds"], 30)
                 self.assertEqual(config["log_interval_seconds"], 5)
-                self.assertEqual(config["temperature_average_seconds"], 3)
+                self.assertEqual(config["temperature_average_seconds"], h.TEMPERATURE_AVERAGE_SECONDS)
                 self.assertEqual(config["sensor_poll_interval_seconds"], .1)
                 r = make_relays(channels)
                 r.schedule(len(channels), 60)

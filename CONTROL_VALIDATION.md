@@ -1,5 +1,7 @@
 # SRS controller validation — November 16, 2026
 
+The saved 105-run comparison below uses the earlier three-second averaging window. The current local configuration is one second and is preserved in the controller. The unit tests also exercise the current setting. To reproduce the saved comparison, use `--average-seconds 3`; omit that option to evaluate the current configured window.
+
 All results below are hardware-free simulations, not experimental validation. No heaters were actuated. The configured 150 C safety limit was preserved. The user selected 30-second minimum ON/OFF dwell, replacing the conflicting earlier 60-second requirement.
 
 ## Evidence and identification
@@ -63,7 +65,7 @@ Settling is the last excursion outside +/-2 C, with at least 10 minutes remainin
 
 ```bat
 py -3.11 -m unittest -v
-py -3.11 validate_control.py --output validation_results.json
+py -3.11 validate_control.py --average-seconds 3 --output validation_results.json
 py -3.11 validate_control.py --sweep
 ```
 

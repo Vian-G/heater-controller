@@ -55,7 +55,7 @@ def validate_temperatures(values):
 
 
 def average_temperatures(history, now):
-    """Average timestamped, already validated four-channel samples in (now-3, now].
+    """Average validated four-channel samples over the configured trailing window.
 
     Prune by elapsed time rather than sample count, so polling jitter does not
     change the window. Callers validate EVERY raw sample before buffering it.

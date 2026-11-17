@@ -237,7 +237,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--sweep", action="store_true")
+    parser.add_argument("--average-seconds", type=float, default=h.TEMPERATURE_AVERAGE_SECONDS,
+                        help="averaging window for this offline comparison only")
     args = parser.parse_args()
+    if not math.isfinite(args.average_seconds) or args.average_seconds <= 0:
+        parser.error("--average-seconds must be finite and positive")
+    h.TEMPERATURE_AVERAGE_SECONDS = args.average_seconds
     if args.sweep:
         ranked = []
         for kp in (.25, .4):
