@@ -1,0 +1,30 @@
+{
+  "started_at": "2026-11-16T20:05:16.559797-05:00",
+  "target_C": 50.0,
+  "mode": "hardware",
+  "heater_serial": 343887,
+  "heater_channels": [
+    0,
+    1,
+    2
+  ],
+  "sensor_serial": 341989,
+  "sensor_channels": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "Kp": 0.1,
+  "Ki": 0.0005,
+  "Kd": 0,
+  "Kp_units": "heater equivalents / C",
+  "Ki_units": "heater equivalents / (C * second)",
+  "max_sensor_spread_C": 30.0,
+  "max_safety_temperature_C": 150.0,
+  "log_interval_seconds": 5.0,
+  "schedule_interval_seconds": 60.0,
+  "min_dwell_seconds": 60.0,
+  "rotation_seconds": 600.0,
+  "integer_tolerance": 0.01
+}

@@ -1,0 +1,53 @@
+{
+  "started_at": "2026-11-16T20:05:16.559797-05:00",
+  "target_C": 50.0,
+  "mode": "hardware",
+  "heater_serial": 343887,
+  "heater_channels": [
+    0,
+    1,
+    2
+  ],
+  "sensor_serial": 341989,
+  "sensor_channels": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "Kp": 0.1,
+  "Ki": 0.0005,
+  "Kd": 0,
+  "Kp_units": "heater equivalents / C",
+  "Ki_units": "heater equivalents / (C * second)",
+  "max_sensor_spread_C": 30.0,
+  "max_safety_temperature_C": 150.0,
+  "log_interval_seconds": 5.0,
+  "schedule_interval_seconds": 60.0,
+  "min_dwell_seconds": 60.0,
+  "rotation_seconds": 600.0,
+  "integer_tolerance": 0.01,
+  "data_quality": {
+    "status": "DEGRADED_HARDWARE_HEATER_0_UNPLUGGED",
+    "annotation_source": "User confirmed in this chat that heater 0 was unplugged for this last 50 C run.",
+    "annotated_at_utc": "2026-11-17T02:20:57.176583+00:00",
+    "disconnected_heater_channels": [
+      0
+    ],
+    "assumed_working_heater_channels": [
+      1,
+      2
+    ],
+    "applies_to": "Entire run; no partial-run disconnect time was supplied.",
+    "temperature_data": "Original measured values retained. These describe the degraded-hardware experiment.",
+    "original_power_fields": "Software-commanded states, ON time and transitions; not measured electrical heat delivery.",
+    "correction": "Inferred heating state and heating ON time of heater 0 are zero. Other channels are assumed to deliver heat when commanded ON. Corrected count sums these inferred states.",
+    "corrected_csv": "data.corrected.csv",
+    "original_config_backup": "config.original.json",
+    "data_csv_sha256": "21dfcac64ad6f7c761697cb21a0a92c30083ac399395187c7933a021b266323e",
+    "rows": 431,
+    "rows_with_reduced_heating_count": 260,
+    "calibration_use": "Not a healthy three-heater test. Use corrected/inferred delivered heating for modeling; do not use pi_output as actual power.",
+    "limitations": "No electrical-current/contact feedback. No counterfactual three-heater temperatures or performance can be reconstructed."
+  }
+}

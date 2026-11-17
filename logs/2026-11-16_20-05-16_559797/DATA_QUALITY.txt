@@ -1,0 +1,26 @@
+DATA QUALITY: HEATER 0 UNPLUGGED
+Run: 2026-11-16_20-05-16_559797
+Target: 50 C
+
+The user confirmed heater 0 was unplugged during this run. Heater channels
+0, 1 and 2 were configured in software, but heater 0 supplied no heat.
+Heaters 1 and 2 are assumed to have worked when commanded ON.
+
+Original data.csv is preserved byte-for-byte (431 rows).
+Its temperatures are measured observations of this degraded experiment.
+Its heater state/count/ON-time columns describe software commands, not
+verified delivered heat. Physical relay switching counters remain unchanged.
+
+Use data.corrected.csv for analysis. All original fields are retained and
+unchanged. Appended corrected_* fields set heating state and heating ON time
+of heater 0 to zero and recompute the heating count. 260 rows have a lower
+corrected heating count. These corrections infer delivered heat from the
+reported unplugged element; they are not current/contact measurements.
+
+Do not treat this as a healthy three-heater calibration or rewrite measured
+temperatures as if heater 0 had worked. Earlier runs are not reclassified
+because their heater-0 connection status has not been confirmed.
+
+config.json includes this annotation. config.original.json preserves the
+original configuration. No controller code, newer logs, or processes were changed.
+Original data.csv SHA-256: 21dfcac64ad6f7c761697cb21a0a92c30083ac399395187c7933a021b266323e

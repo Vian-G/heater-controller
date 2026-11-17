@@ -32,6 +32,52 @@ def make_relays(channels):
 
 
 class ControllerTests(unittest.TestCase):
+    def test_three_second_average_with_jitter_and_partial_startup(self):
+        from collections import deque
+        history = deque([(0.0, (10, 20, 30, 40))])
+        self.assertEqual(h.average_temperatures(history, 0), [10, 20, 30, 40])
+        history.extend([(0.9, (20, 30, 40, 50)), (2.7, (30, 40, 50, 60))])
+        self.assertEqual(h.average_temperatures(history, 2.7), [20, 30, 40, 50])
+        self.assertEqual(h.average_temperatures(history, 3.0), [25, 35, 45, 55])
+        self.assertEqual(h.average_temperatures(history, 4.0), [30, 40, 50, 60])
+        with self.assertRaises(ValueError):
+            h.average_temperatures(history, 6.0)
+
+    def test_raw_safety_fault_cannot_be_hidden_by_average(self):
+        from collections import deque
+        for bad in ([151] * 4, [20, 20, 20, 51], [float("nan")] * 4):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as tmp:
+                clock = [0.0]
+                captured = []
+
+                class Sensor(Output):
+                    def __init__(self, ch):
+                        super().__init__()
+                        self.ch = ch
+
+                    def getTemperature(self):
+                        return bad[self.ch] if clock[0] >= 0.1 else 20.0
+
+                def setup(relays, sensors):
+                    captured.append(relays)
+                    relays.outputs.update({ch: Output() for ch in relays.channels})
+                    sensors.extend(Sensor(ch) for ch in range(4))
+                    relays.stopped.wait = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+
+                with patch.object(h, "monotonic", side_effect=lambda: clock[0]), \
+                        patch.object(h, "attach_hardware", setup), \
+                        patch.object(h, "create_log", return_value=Path(tmp)), \
+                        patch.object(h, "poll_stop", side_effect=lambda r, command: command), \
+                        patch("builtins.input", return_value="100"), patch("builtins.print"):
+                    self.assertEqual(h.main([]), 1)
+                self.assertEqual(clock[0], 0.1)  # Before next 5 s control update.
+                self.assertFalse(any(captured[0].on.values()))
+                self.assertTrue(all(v == 0.1 for v in captured[0].on_seconds.values()))
+                with (Path(tmp) / "data.csv").open() as log:
+                    rows = list(csv.DictReader(log))
+                self.assertEqual(rows[-1]["controller_state"], "FAULT")
+                self.assertEqual(rows[-1]["raw_TI_0_C"], str(bad[0]))
+
     def test_subsets_and_integer_demands(self):
         from itertools import combinations
         for count in range(1, 5):
@@ -39,8 +85,8 @@ class ControllerTests(unittest.TestCase):
                 for demand in range(count + 1):
                     with self.subTest(channels=channels, demand=demand):
                         r = make_relays(channels)
-                        r.schedule(demand, 59.99)
-                        self.assertEqual(sum(r.on.values()), 0)
+                        r.schedule(demand, 0)
+                        self.assertEqual(sum(r.on.values()), demand)
                         for now in range(60, 3601, 60):
                             r.schedule(demand, now)
                             self.assertEqual(sum(r.on.values()), demand)
@@ -77,45 +123,50 @@ class ControllerTests(unittest.TestCase):
 
     def test_dwell_rapid_targets_and_delayed_slots(self):
         r = make_relays((0, 1, 2, 3))
-        pi = h.PI(4)
+        pi = h.Controller(4)
         previous = dict(r.on)
-        last = {ch: 0 for ch in r.channels}
+        last = {ch: -60 for ch in r.channels}
         for now in range(1, 3601):
             target = 120 if now % 17 < 8 else 10
             demand = pi.update(target, h.validate_temperatures([50] * 4), now)
             r.schedule(demand, now)
             for ch in r.channels:
                 if r.on[ch] != previous[ch]:
-                    self.assertGreaterEqual(now - last[ch], 60)
+                    self.assertGreaterEqual(now - last[ch], 30)
                     last[ch] = now
             previous = dict(r.on)
         r = make_relays((0,))
         for now, demand, expected in ((60, 1, True), (61, 0, True),
-                                      (119.9, 0, True), (120, 0, False),
-                                      (121, 1, False), (180, 1, True),
+                                      (89.9, 0, True), (90, 0, False),
+                                      (91, 1, False), (120, 1, True),
                                       (1000, 0, False), (1001, 1, False),
-                                      (1060, 1, True)):
+                                      (1030, 1, True)):
             r.schedule(demand, now)
             self.assertEqual(r.on[0], expected)
 
-    def test_pi_elapsed_time_saturation_and_antiwindup(self):
-        pi = h.PI(3, kp=0.1, ki=0.01)
-        self.assertEqual(pi.update(21, 20, 0), 0.1)
-        self.assertAlmostEqual(pi.update(21, 20, 7), 0.17)
-        for now in range(8, 10000):
-            self.assertEqual(pi.update(100, 20, now), 3)
-        self.assertAlmostEqual(pi.integral, 0.07)
-        self.assertEqual(pi.update(0, 20, 10000), 0)
-        self.assertAlmostEqual(pi.integral, 0.07)
-        # Unwind a positive integral when error reverses within the rails.
-        pi.integral = 2
-        self.assertLess(pi.update(19, 20, 10005), 1.9)
-        for now in range(10010, 11000, 5):
-            pi.update(21, 20, now)
-        self.assertTrue(0 <= pi.integral <= 3)
+    def test_prediction_warmup_and_antiwindup(self):
+        control = h.Controller(3)
+        for now in range(0, 1000, 5):
+            self.assertEqual(control.update(100, 20, now), 3)
+            self.assertEqual(control.integral, 0)
+        control = h.Controller(3)
+        before = control.update(50, 40, 0)
+        after = control.update(50, 40.4, 5)
+        self.assertLess(after, before)  # Rising measurement cuts power early.
+        self.assertGreater(control.predicted, 40.4)
+        control.integral = 3
+        self.assertEqual(control.update(50, 55, 10), 0)
+        self.assertLess(control.integral, 3)  # Unwind even while output is zero.
+        flat = h.Controller(3)
+        flat.update(50, 40, 0)
+        flat.update(100, 40, 7)
+        self.assertEqual(flat.rate, 0)  # No derivative kick on setpoint change.
+        self.assertEqual(flat.integral, 0)
         for value in (float("nan"), float("inf")):
             with self.assertRaises(ValueError):
-                pi.update(value, 20, 12000)
+                h.Controller(3).update(value, 20, 0)
+        with self.assertRaises(ValueError):
+            flat.update(50, 40, 7)
 
     def test_emergency_shutdown_and_latch(self):
         for reason in ("Emergency stop", "Sensor disconnected", "Manual STOP"):
@@ -129,10 +180,10 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(r.reason, reason)
             self.assertFalse(any(r.on.values()))
             self.assertTrue(all(not device.commands[-1] for device in r.outputs.values()))
-        # A fresh invocation starts OFF and must earn a new startup dwell.
+        # A fresh invocation can heat on its first valid demand without a delay.
         fresh = make_relays((0,))
         fresh.schedule(1, 0)
-        self.assertFalse(fresh.on[0])
+        self.assertTrue(fresh.on[0])
 
     def test_shutdown_attempts_other_outputs_after_failure(self):
         r = make_relays((0, 1, 2))
@@ -173,15 +224,17 @@ class ControllerTests(unittest.TestCase):
     def test_csv_and_json(self):
         for channels in ((2,), (0, 3), (0, 1, 2), (0, 1, 2, 3)):
             with tempfile.TemporaryDirectory() as tmp:
-                folder = h.create_log(80, channels, Path(tmp))
+                folder = h.create_log(80, channels, Path(tmp), hardware=True)
                 config = json.loads((folder / "config.json").read_text())
                 self.assertEqual(config["heater_serial"], 343887)
                 self.assertEqual(config["sensor_serial"], 341989)
                 self.assertEqual(config["heater_channels"], list(channels))
                 self.assertEqual(config["mode"], "hardware")
                 self.assertNotIn("dry_run", config)
-                self.assertEqual(config["min_dwell_seconds"], 60)
+                self.assertEqual(config["min_dwell_seconds"], 30)
                 self.assertEqual(config["log_interval_seconds"], 5)
+                self.assertEqual(config["temperature_average_seconds"], 3)
+                self.assertEqual(config["sensor_poll_interval_seconds"], .1)
                 r = make_relays(channels)
                 r.schedule(len(channels), 60)
                 log = io.StringIO()
@@ -218,7 +271,7 @@ class ControllerTests(unittest.TestCase):
                     patch.object(h, "create_log", return_value=folder), \
                     patch("builtins.input", return_value="80"), \
                     patch("builtins.print"):
-                self.assertEqual(h.main(), 1)
+                self.assertEqual(h.main([]), 1)
             self.assertTrue(all(device.closed for device in outputs + sensors))
             self.assertTrue(all(device.commands[-1] is False for device in outputs))
             with (folder / "data.csv").open() as log:
@@ -252,13 +305,13 @@ class ControllerTests(unittest.TestCase):
                 with patch.object(h, "monotonic", side_effect=lambda: clock[0]), \
                         patch.object(h, "attach_hardware", setup), \
                         patch.object(h, "create_log", return_value=folder), \
-                        patch.object(h.threading, "Thread"), \
+                        patch.object(h, "poll_stop", side_effect=lambda r, command: command), \
                         patch("builtins.input", return_value="100"), patch("builtins.print"):
-                    result = h.main()
+                    result = h.main([])
                 r = captured[0]
                 self.assertEqual(result, 0 if isinstance(failure, KeyboardInterrupt) else 1)
                 self.assertEqual(clock[0], 65)
-                self.assertTrue(all(r.on_seconds[ch] == 5 for ch in r.channels))
+                self.assertTrue(all(r.on_seconds[ch] == 65 for ch in r.channels))
                 self.assertFalse(any(r.on.values()))
                 self.assertTrue(all(device.closed for device in [*outputs.values(), *sensors]))
                 self.assertTrue(all(device.commands[-1] is False for device in outputs.values()))
@@ -277,14 +330,40 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(any(r.on.values()))
         self.assertTrue(all(device.commands[-1] is False for device in r.outputs.values()))
 
-    def test_console_stop(self):
+    def test_windows_console_stop(self):
+        from types import SimpleNamespace
         r = make_relays((0,))
         r.schedule(1, 60)
-        with patch("builtins.input", side_effect=["anything", " stop "]), \
-                patch.object(h, "monotonic", return_value=61):
-            h.console_stop(r)
+        keys = list(" stox\bp \r")
+        console = SimpleNamespace(kbhit=lambda: bool(keys), getwch=lambda: keys.pop(0))
+        with patch.dict(sys.modules, {"msvcrt": console}), \
+                patch.object(h.sys, "platform", "win32"), \
+                patch.object(h, "monotonic", return_value=61), patch("builtins.print"), \
+                patch("builtins.input", side_effect=AssertionError("Must not call input")):
+            h.poll_stop(r, "")
         self.assertEqual(r.state, "STOPPED")
         self.assertFalse(r.on[0])
+
+    def test_windows_console_idle_and_partial_command(self):
+        from types import SimpleNamespace
+        r = make_relays((0,))
+        keys = []
+        console = SimpleNamespace(kbhit=lambda: bool(keys), getwch=lambda: keys.pop(0))
+        with patch.dict(sys.modules, {"msvcrt": console}), \
+                patch.object(h.sys, "platform", "win32"), patch("builtins.print"), \
+                patch("builtins.input", side_effect=EOFError):
+            for now in range(0, 121, 5):
+                self.assertEqual(h.poll_stop(r, ""), "")
+                r.schedule(1, now)
+            self.assertEqual(r.state, "RUNNING")
+            self.assertTrue(r.on[0])
+            keys.extend("st")
+            command = h.poll_stop(r, "")
+            self.assertEqual(command, "st")
+            keys.extend("op\r")
+            with patch.object(h, "monotonic", return_value=121):
+                h.poll_stop(r, command)
+            self.assertFalse(r.on[0])
 
     def test_phidget_configuration_and_error_detach_callbacks(self):
         from types import SimpleNamespace
@@ -305,6 +384,15 @@ class ControllerTests(unittest.TestCase):
             def openWaitForAttachment(self, timeout):
                 self.timeout = timeout
 
+            def getMinDataInterval(self):
+                return 32
+
+            def setDataInterval(self, interval):
+                self.interval = interval
+
+            def getDataInterval(self):
+                return self.interval
+
         modules = {
             'Phidget22.Devices.DigitalOutput': SimpleNamespace(DigitalOutput=Device),
             'Phidget22.Devices.TemperatureSensor': SimpleNamespace(TemperatureSensor=Device),
@@ -313,7 +401,9 @@ class ControllerTests(unittest.TestCase):
             r = make_relays((0, 2))
             sensors = []
             with patch.dict(sys.modules, modules), patch.object(h, 'monotonic', return_value=0):
-                h.attach_hardware(r, sensors)
+                intervals = h.attach_hardware(r, sensors)
+            self.assertEqual(intervals, {ch: 32 for ch in range(4)})
+            self.assertTrue(all(d.interval == 32 for d in sensors))
             self.assertEqual(set(r.outputs), {0, 2})
             self.assertTrue(all(d.serial == 343887 and d.channel == ch
                                 for ch, d in r.outputs.items()))
@@ -346,21 +436,91 @@ class ControllerTests(unittest.TestCase):
         r.outputs[0].setState = slow_write
         r.schedule(1, 60)
         self.assertEqual(r.last_transition[0], 62)
-        clock[0] = 120
-        r.schedule(0, 120)
+        clock[0] = 90
+        r.schedule(0, 90)
         self.assertTrue(r.on[0])
-        clock[0] = 122
-        r.schedule(0, 122)
+        clock[0] = 92
+        r.schedule(0, 92)
         self.assertFalse(r.on[0])
-        self.assertGreaterEqual(r.last_transition[0] - 62, 60)
+        self.assertGreaterEqual(r.last_transition[0] - 62, 30)
 
-    def test_default_and_no_hardware_dependency(self):
-        self.assertFalse(hasattr(h, "DRY_RUN"))
+    def test_explicit_simulation_never_attaches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+
+            clock = [0.0]
+
+            def stop(relays, command):
+                if clock[0] >= 65:
+                    relays.shutdown("Manual STOP", fault=False)
+                return ""
+
+            with patch.object(h, "monotonic", side_effect=lambda: clock[0]), \
+                    patch.object(h.threading.Event, "wait", side_effect=lambda seconds:
+                                 clock.__setitem__(0, clock[0] + 5)), \
+                    patch.object(h, "attach_hardware") as attach, \
+                    patch.object(h, "create_log", return_value=folder) as create, \
+                    patch.object(h, "poll_stop", side_effect=stop), \
+                    patch("builtins.input", return_value="50"), patch("builtins.print"):
+                self.assertEqual(h.main(["--simulate"]), 0)
+            attach.assert_not_called()
+            with (folder / "data.csv").open() as log:
+                rows = list(csv.DictReader(log))
+            self.assertEqual(rows[0]["heaters_on_count"], "3")
+            self.assertEqual(rows[-1]["controller_state"], "STOPPED")
+            self.assertGreater(float(rows[-2]["avg_C"]), float(rows[0]["avg_C"]))
+            self.assertFalse(create.call_args.kwargs["hardware"])
+            config = json.loads((h.create_log(50, (0, 1, 2), folder, hardware=False) / "config.json").read_text())
+            self.assertEqual(config["mode"], "simulation")
+        self.assertEqual(h.MAX_SAFETY_TEMPERATURE_C, 150)
         self.assertEqual(h.HEATER_CHANNELS, (0, 1, 2))
         self.assertFalse(any(name.startswith("Phidget22") for name in sys.modules))
         for channels in ((), (4,), (0, 0)):
             with self.assertRaises(ValueError):
                 make_relays(channels)
+
+    def test_unbiased_small_fractional_demands_with_jitter(self):
+        for demand in (.001, .5, .999, 1.001, 1.5, 2.5, 3.7, 3.999):
+            r = make_relays((0, 1, 2, 3))
+            end = 36000
+            now = 0.0
+            while now < end:
+                r.schedule(demand, now)
+                now += 7.3  # Slots drift; energy must be based on elapsed time.
+            r.account(end)
+            delivered = sum(r.on_seconds.values())
+            self.assertLessEqual(abs(delivered-demand*end), 60)
+        r = make_relays((0, 1, 2))
+        r.energy_error = 10000
+        r.schedule(0, 0)
+        self.assertFalse(any(r.on.values()))  # No debt repayment at zero demand.
+
+    def test_closed_loop_improves_legacy_pi_with_real_relay_dwell(self):
+        from validate_control import simulate
+        old = simulate(duration=7200, strategy="legacy")
+        revised = simulate(duration=7200)
+        self.assertLess(revised["overshoot_C"], 2)
+        self.assertLess(revised["overshoot_C"], old["overshoot_C"])
+        self.assertLess(revised["settling_min"], old["settling_min"])
+        self.assertLess(revised["max_tail_abs_error_C"], 2)
+        self.assertGreaterEqual(revised["minimum_normal_dwell_s"], 30)
+        disturbance = simulate(disturbance=True, noise=.08)
+        self.assertLess(disturbance["max_tail_abs_error_C"], 2)
+        failed_heater = simulate(disconnected=(0,))
+        # A physically unplugged element is unobservable to software; do not
+        # assert a +/-2 C promise in this degraded-hardware scenario.
+        self.assertFalse(failed_heater["fault"])
+        self.assertLess(failed_heater["max_tail_abs_error_C"], 3)
+        self.assertGreaterEqual(failed_heater["minimum_normal_dwell_s"], 30)
+
+    def test_safety_trip_latches_off_but_stored_heat_can_keep_rising(self):
+        from validate_control import simulate
+        result = simulate(target=150, model="fast_low_loss", duration=7200)
+        self.assertIn("Maximum safety temperature", result["fault"])
+        self.assertIsNotNone(result["fault_time_s"])
+        self.assertEqual(result["final_heaters_on_count"], 0)
+        self.assertGreater(result["peak_C"], 150)  # OFF cannot remove stored heat.
+        self.assertIsNone(result["settling_min"])
 
 
 if __name__ == "__main__":

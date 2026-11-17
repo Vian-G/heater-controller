@@ -1,34 +1,36 @@
 # Heater controller
 
-Runs locally on the Windows 8.1 hardware laptop using Python 3.11. GitHub stores code; the laptop controls the directly connected Phidgets.
+Single-file predictive PI temperature control for the existing SRS box. Default is **hardware control**. Running `heater.py` connects to the existing Phidgets. Simulation is available only with `--simulate`. There is no initial waiting period: the first valid reading can enable heat immediately.
 
-`heater.py` is a single-file PI controller with no GUI. **Running it connects directly to the existing Phidgets and controls the heaters.** Enter a target in C, and type `STOP` + Enter or press Ctrl+C to stop. There is no dry-run flag or simulation mode; tests use mocked hardware.
+```bat
+py -3.11 heater.py
+py -3.11 -m unittest -v
+py -3.11 validate_control.py --output validation_results.json
+```
 
-Hardware remains heater serial **343887**, enabled channels **0, 1, 2**, and sensor serial **341989**, channels **0, 1, 2, 3**. Edit only `HEATER_CHANNELS` to select any nonempty subset of channels 0 through 3. Supporting four heaters does not enable the fourth by default.
+Run `py -3.11 heater.py`, enter a target, and use `STOP` + Enter or Ctrl+C to stop. For hardware-free simulation, run `py -3.11 heater.py --simulate`. Independent hardware overtemperature protection and inspected mains wiring/protection remain necessary. Software cannot stop welded relay contacts or protect against total computer/communication failure. No hardware was actuated during development or validation.
 
-Operation requires inspected mains wiring and electrical protection and an **independent hardware overtemperature cutoff**. Review `MAX_SAFETY_TEMPERATURE_C` (initially 150 C) for the actual box, materials and process. Software OFF commands cannot protect against welded relay contacts, USB loss, or total computer failure. Actual hardware operation has not been validated here.
+Heater serial **343887**, configured channels **(0, 1, 2)**; temperature sensor serial **341989**, channels **0, 1, 2, 3**. `HEATER_CHANNELS` accepts any nonempty unique subset of 0 through 3. The fourth heater is not enabled by default. All four sensors are validated, then averaged. Maximum sensor spread remains **30 C**; maximum individual sensor temperature remains **150 C**, unchanged. Faults latch OFF, and all attached outputs are commanded OFF and devices closed on exit, including partial setup and logging failures.
 
 ## Control and relay scheduling
 
-The PI uses the average of all four thermocouples every 5 seconds and produces 0 to N heater equivalents. `KP = 0.10` has units heater equivalents/C; `KI = 0.0005` has units heater equivalents/(C*s); derivative gain is zero. The bounded integral freezes when error drives further into saturation and can unwind when error reverses. Integration and relay timing use monotonic elapsed time. Gains are provisional: November 14 three-element test data is not included, and these values do **not** guarantee +/-2 C control.
+Each temperature channel is configured to its device-reported minimum data interval (the [1048 specification](https://www.phidgets.com/?prodid=1028) lists 32 ms). The program polls at 10 Hz and averages each thermocouple's readings over the trailing **three seconds**. A partial window is used at startup, so there is no added waiting period. Every raw reading is checked for sensor faults, spread and overtemperature before averaging; smoothing cannot hide a safety trip. JSON records the averaging window, polling interval and effective device intervals.
 
-At nominal 60-second slots, a fractional accumulator distributes demand across adjacent integer counts: 2.5 alternates 2 and 3, while 3.7 uses 4 heaters in seven out of ten slots. Demands within 0.01 of an integer use that integer to avoid tiny dithering. Each relay separately enforces at least 60 seconds ON and OFF, including an initial 60-second OFF dwell. Delayed slots are not replayed. Actual changes can be later because of dwell, polling or communication time; dwell takes priority over matching demand.
+The controller updates every five seconds using the three-second averages. It predicts a short distance ahead using a filtered temperature slope, then applies PI to that predicted error. Full capacity is available immediately when far below target. Large warm-up errors do not accumulate integral; near target, negative predicted error can unload integral even at zero output. The same equation spans warm-up and regulation, with no preloaded full-power integral at handoff. There is no fixed heat-loss feedforward: the available run included an unplugged heater and cannot establish reliable high-temperature heat loss.
 
-Additional heat selects eligible heaters with the least cumulative ON time; reducing heat turns off those with the most. Steady partial integer loads rotate one pair when runtime imbalance reaches 600 seconds, at most once per 600 seconds. This distributes use across all enabled heaters without continuous swapping. Full demand necessarily keeps all enabled heaters ON.
+Settings are provisional: `KP=0.25` heater equivalents/predicted C, `KI=0.001` heater equivalents/(predicted C*s), lookahead **60 s**, slope filter **20 s**. The integral is enabled inside the larger of 10 C or N/KP. See [CONTROL_VALIDATION.md](CONTROL_VALIDATION.md) for model assumptions, comparisons, tuning and limitations. **Simulation does not establish +/-2 C regulation on the box.**
 
-Sensors are checked every 0.25 seconds independently of relay slots. Missing, invalid or nonfinite readings, spread above 30 C, any sensor above the safety limit, read/write exceptions, detach events and Phidgets error events latch a shutdown. All Phidgets error events are conservatively treated as faults; see the vendor's [error-event guidance](https://www.phidgets.com/docs/Handling_Errors_and_Logging). STOP, Ctrl+C and shutdown also send OFF immediately without respecting dwell. OFF is attempted for every configured output even if one write fails, and all created device handles are closed in `finally`, including partial setup. An OFF failure is logged and cannot establish the physical contact state. A fault requires fixing the cause and manually starting a new run; reconnection never resumes a stopped run.
+The user-confirmed relay minimum is now **30 seconds ON and 30 seconds OFF per relay**, replacing the earlier 60-second requirement. At nominal 30-second slots, the scheduler tracks requested minus delivered **heater-seconds**, choosing the next integer count to reduce that difference. It never simply rounds the controller demand or snaps small fractions to integers. Actual elapsed ON time counts even during late slots or blocked changes. No old heat debt is repaid when demand reaches zero. Normal changes honor each relay's dwell, measured after successful USB writes; emergency stop, manual stop and faults bypass dwell and command every output OFF immediately.
 
-## Logs and tests
+Runtime-based selection balances enabled heaters: start eligible heaters with less ON time, stop those with more, and rotate one pair at most once per ten minutes when a steady integer load creates sufficient imbalance. No heater is swapped solely to churn assignments at every slot. The console uses nonblocking Windows key polling for STOP, avoiding the background input reader that previously ended runs.
 
-Logging remains `logs/<start time>/config.json` and `data.csv`, with timezone-aware timestamps. The original first six columns remain `timestamp,TI_0_C,TI_1_C,TI_2_C,TI_3_C,avg_C`. Additional columns record target, PI demand, count ON, four commanded heater states, enabled heaters' cumulative ON seconds, transitions, last monotonic transition times, controller state and fault reason. Disabled heaters log zero state. State records commands, not physical contact feedback. Rows/status print every 5 seconds, plus a final shutdown/fault row. JSON records configuration, units and `mode: "hardware"`. Logs stay local and are ignored by Git.
+## Logs and validation
 
-Run the deterministic, hardware-free standard-library tests with:
+Logs retain `logs/<start time>/config.json` and `data.csv`, timezone-aware timestamps, five-second rows/status, and a final shutdown row. Original temperature columns now contain the three-second channel averages; `avg_C` is their four-channel mean. `pi_output` (the predictive PI demand), four heater-state columns and runtime/transition columns remain. Appended diagnostics show control mode, filtered slope, predicted temperature, integral output and duty error. Additional `raw_TI_0_C` through `raw_TI_3_C` columns retain the latest unaveraged readings, including a fault-causing reading when available. A final fault row retains the last computed averages alongside the latest raw readings and fault reason. JSON records hardware/simulation mode and all control settings. Relay states are successfully issued commands, not electrical-current or contact feedback; an unplugged heater cannot be detected from them.
 
-```bat
-py -3.11 -m unittest -v
-```
+The November 16 50 C run is analyzed with **heater 0 delivering zero heat**, per the user's correction. November 14 logs were not found. [validation_results.json](validation_results.json) contains the deterministic comparison results; `validate_control.py` uses only the standard library and actual simulated relay states to heat the model. `--sweep` reproduces the small tuning comparison. Tests never actuate hardware. Existing logs stay local and are ignored by Git.
 
-Tests cover all 15 nonempty channel subsets, integer/fractional demand, balanced runtime, dwell, delayed slots and USB writes, rapid target changes, anti-windup, emergency/STOP/Ctrl+C shutdown, faults while heating, fault latching, partial setup cleanup and CSV/JSON structure. No real Phidgets are imported or actuated.
+The controller commands below launch hardware control. Add `--simulate` only when simulation is wanted.
 
 ## Install once on Windows 8.1
 
@@ -57,7 +59,7 @@ Keep code edits on the modern laptop; commit and push there, then pull on the ha
 
 ## Live temperature graph
 
-The console prints all four sensor temperatures (`TI_0` through `TI_3`), average, target, PI output and heaters ON every **5 seconds**. The existing optional separate graph reads all four temperatures and the average from the latest CSV, with the latest 360 readings visible (about 30 minutes). It follows new runs automatically and shows the age of the last sample when readings stop. Older simulation logs may still be present; check their `config.json` for run mode.
+The console prints all four sensor temperatures (`TI_0` through `TI_3`), average, target, PI output and heaters ON every **5 seconds**. The existing optional separate graph reads all four temperatures and the average from the latest CSV, with the latest 360 readings visible (about 30 minutes). It follows new runs automatically and shows the age of the last sample when readings stop. The graph also reads simulation logs; check each run's `config.json` for its mode.
 
 After downloading updates, open another **Command Prompt** and run:
 
