@@ -2,7 +2,33 @@
 
 Runs locally on the Windows 8.1 hardware laptop using Python 3.11. GitHub stores code; the laptop controls the directly connected Phidgets.
 
-The supplied control code is preserved, with pasted HTML/Markdown escapes removed. Heater serial **343887**, channels **0, 1, 2**; sensor serial **341989**, channels **0, 1, 2, 3**. All heaters use the four-sensor average: ON below target minus 1 C, OFF above target plus 1 C, otherwise retain their state. A spread greater than 30 C turns heaters off and stops the loop. Loop interval: 0.5 seconds; log interval: 5 seconds. Logging remains `logs/<start time>/config.json` and `data.csv` with columns `timestamp,TI_0_C,TI_1_C,TI_2_C,TI_3_C,avg_C`. Logs stay on the laptop and are ignored by Git.
+`heater.py` is a single-file PI controller with no GUI. **Running it connects directly to the existing Phidgets and controls the heaters.** Enter a target in C, and type `STOP` + Enter or press Ctrl+C to stop. There is no dry-run flag or simulation mode; tests use mocked hardware.
+
+Hardware remains heater serial **343887**, enabled channels **0, 1, 2**, and sensor serial **341989**, channels **0, 1, 2, 3**. Edit only `HEATER_CHANNELS` to select any nonempty subset of channels 0 through 3. Supporting four heaters does not enable the fourth by default.
+
+Operation requires inspected mains wiring and electrical protection and an **independent hardware overtemperature cutoff**. Review `MAX_SAFETY_TEMPERATURE_C` (initially 150 C) for the actual box, materials and process. Software OFF commands cannot protect against welded relay contacts, USB loss, or total computer failure. Actual hardware operation has not been validated here.
+
+## Control and relay scheduling
+
+The PI uses the average of all four thermocouples every 5 seconds and produces 0 to N heater equivalents. `KP = 0.10` has units heater equivalents/C; `KI = 0.0005` has units heater equivalents/(C*s); derivative gain is zero. The bounded integral freezes when error drives further into saturation and can unwind when error reverses. Integration and relay timing use monotonic elapsed time. Gains are provisional: November 14 three-element test data is not included, and these values do **not** guarantee +/-2 C control.
+
+At nominal 60-second slots, a fractional accumulator distributes demand across adjacent integer counts: 2.5 alternates 2 and 3, while 3.7 uses 4 heaters in seven out of ten slots. Demands within 0.01 of an integer use that integer to avoid tiny dithering. Each relay separately enforces at least 60 seconds ON and OFF, including an initial 60-second OFF dwell. Delayed slots are not replayed. Actual changes can be later because of dwell, polling or communication time; dwell takes priority over matching demand.
+
+Additional heat selects eligible heaters with the least cumulative ON time; reducing heat turns off those with the most. Steady partial integer loads rotate one pair when runtime imbalance reaches 600 seconds, at most once per 600 seconds. This distributes use across all enabled heaters without continuous swapping. Full demand necessarily keeps all enabled heaters ON.
+
+Sensors are checked every 0.25 seconds independently of relay slots. Missing, invalid or nonfinite readings, spread above 30 C, any sensor above the safety limit, read/write exceptions, detach events and Phidgets error events latch a shutdown. All Phidgets error events are conservatively treated as faults; see the vendor's [error-event guidance](https://www.phidgets.com/docs/Handling_Errors_and_Logging). STOP, Ctrl+C and shutdown also send OFF immediately without respecting dwell. OFF is attempted for every configured output even if one write fails, and all created device handles are closed in `finally`, including partial setup. An OFF failure is logged and cannot establish the physical contact state. A fault requires fixing the cause and manually starting a new run; reconnection never resumes a stopped run.
+
+## Logs and tests
+
+Logging remains `logs/<start time>/config.json` and `data.csv`, with timezone-aware timestamps. The original first six columns remain `timestamp,TI_0_C,TI_1_C,TI_2_C,TI_3_C,avg_C`. Additional columns record target, PI demand, count ON, four commanded heater states, enabled heaters' cumulative ON seconds, transitions, last monotonic transition times, controller state and fault reason. Disabled heaters log zero state. State records commands, not physical contact feedback. Rows/status print every 5 seconds, plus a final shutdown/fault row. JSON records configuration, units and `mode: "hardware"`. Logs stay local and are ignored by Git.
+
+Run the deterministic, hardware-free standard-library tests with:
+
+```bat
+py -3.11 -m unittest -v
+```
+
+Tests cover all 15 nonempty channel subsets, integer/fractional demand, balanced runtime, dwell, delayed slots and USB writes, rapid target changes, anti-windup, emergency/STOP/Ctrl+C shutdown, faults while heating, fault latching, partial setup cleanup and CSV/JSON structure. No real Phidgets are imported or actuated.
 
 ## Install once on Windows 8.1
 
@@ -31,7 +57,7 @@ Keep code edits on the modern laptop; commit and push there, then pull on the ha
 
 ## Live temperature graph
 
-The console shows all four sensor temperatures (`TI_0` through `TI_3`), the average, and heater state every loop. The separate graph shows all four temperatures and the average from the latest run's CSV, with new points every **5 seconds** and the latest 360 readings visible (about 30 minutes). It follows new runs automatically and shows the age of the last sample when readings stop.
+The console prints all four sensor temperatures (`TI_0` through `TI_3`), average, target, PI output and heaters ON every **5 seconds**. The existing optional separate graph reads all four temperatures and the average from the latest CSV, with the latest 360 readings visible (about 30 minutes). It follows new runs automatically and shows the age of the last sample when readings stop. Older simulation logs may still be present; check their `config.json` for run mode.
 
 After downloading updates, open another **Command Prompt** and run:
 
@@ -65,7 +91,3 @@ git push
 ```
 
 Pushing changes requires GitHub authentication on the modern laptop. Then use the update command above on the hardware laptop.
-
-## Existing shutdown behavior
-
-Ctrl+C exits the loop and reaches the existing `finally` block, which closes channels. The original code does not explicitly turn outputs off in `finally`, and device attachment occurs before the protected block. These behaviors were preserved; this packaging work does not establish fail-safe shutdown. Use the setup's physical heater shutdown procedure when stopping or handling errors.
